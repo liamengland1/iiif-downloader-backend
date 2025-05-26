@@ -30,6 +30,7 @@ app = FastAPI()
 
 origins = [
     "http://iiif-downloader.liamengland.com",
+    "https://iiif-downloader.liamengland.com"
     "http://localhost",
     "http://localhost:5173"
 ]
