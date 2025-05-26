@@ -1,0 +1,6 @@
+fastapi[standard]==0.115.12
+starlette==0.46.2
+aiofiles==24.1.0
+-e git+https://github.com/liamengland1/iiif-download#egg=iiif_download
+img2pdf==0.6.1
+ocrmypdf==16.10.1
