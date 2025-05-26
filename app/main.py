@@ -1,5 +1,7 @@
+import asyncio
 import os
 import shutil
+import aiofiles
 from fastapi import FastAPI, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from iiif_download import IIIFManifest
@@ -8,6 +10,20 @@ import img2pdf
 import ocrmypdf
 from pathlib import Path
 from starlette.background import BackgroundTask
+
+
+async def async_log_monitor(events_log):
+    async with aiofiles.open(events_log, mode='r') as f:
+        while True:
+            line = await f.readline()
+            if not line:
+                await asyncio.sleep(0.1)  # Non-blocking sleep
+                # print("Nothing new")
+            elif line.startswith("END---"):
+                print("End of log. Stopping monitoring.")
+                break
+            else:
+                yield f"data: {line.strip()}\n\n"
 
 app = FastAPI()
 
@@ -65,12 +81,24 @@ async def iiif_endpoint_eventstream(manifestURL: str, response: Response, ocr: b
         return {"error": "Invalid manifest URL"}
 
     async def event_stream():
-        # Step 1: Load the IIIF manifest
-        yield "data: Downloading images...\n\n"
-        manifest = IIIFManifest(manifest_url, pct_size=pctSize)
+        # Step 1: Download images from the IIIF manifest
+
+        manifest = IIIFManifest(manifest_url, pct_size=pctSize, is_logged=False)
         temp_dir = f"{str(uuid.uuid4())}/"
-        await manifest.download(temp_dir)
-        yield "data: Downloading images... done.\n\n"
+        events_log = Path("img").joinpath(temp_dir, "events.log")
+        events_log.parent.mkdir(parents=True, exist_ok=True)
+        events_log.touch()
+
+        download_task = asyncio.create_task(manifest.download(temp_dir))
+
+        async for message in async_log_monitor(events_log):
+            yield message
+
+        # yield "data: Downloading images...\n\n"
+
+        await download_task
+
+        # yield "data: Downloading images... done.\n\n"
 
         # Step 2: Convert images to PDF
         yield "data: Converting images to PDF...\n\n"
@@ -78,14 +106,20 @@ async def iiif_endpoint_eventstream(manifestURL: str, response: Response, ocr: b
         pdf_dir = temp_dir.joinpath("pdf")
         pdf_dir.mkdir(parents=True, exist_ok=True)
         image_files = sorted(temp_dir.glob("*.jpg"))
-        with open(pdf_dir.joinpath("out.pdf"), "wb") as f:
-            f.write(img2pdf.convert([str(img) for img in image_files]))
+        # with open(pdf_dir.joinpath("out.pdf"), "wb") as f:
+        #    f.write(img2pdf.convert([str(img) for img in image_files]))
+        await asyncio.to_thread(
+            lambda: pdf_dir.joinpath("out.pdf").write_bytes(
+                img2pdf.convert([str(img) for img in image_files])
+            )
+        )
         yield "data: PDF created successfully.\n\n"
 
         # Step 3: Perform OCR if requested
         if ocr:
-            yield "data: Performing OCR on the PDF...\n\n"
-            ocrmypdf.ocr(
+            yield "data: Running OCR on the PDF... this can take a while. Please be patient!\n\n"
+            await asyncio.to_thread(
+                ocrmypdf.ocr,
                 pdf_dir.joinpath("out.pdf"),
                 pdf_dir.joinpath("out_ocr.pdf"),
                 language="eng",
@@ -99,7 +133,7 @@ async def iiif_endpoint_eventstream(manifestURL: str, response: Response, ocr: b
         else:
             yield f"data:pdfurl:/tmp/{str(pdf_dir.joinpath('out.pdf')).replace('img/', '')}\n\n"
 
-        yield "data: Process completed.\n\n"
+        yield "data:close\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -118,5 +152,6 @@ def cleanup(path: Path):
     target_dir = path.parent.parent
     if target_dir.exists():
         shutil.rmtree(target_dir)
+        print(f"\n\n{target_dir} removed")
     else:
         os.remove(path)
