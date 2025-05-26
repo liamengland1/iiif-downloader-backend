@@ -4,6 +4,7 @@ import shutil
 import aiofiles
 from fastapi import FastAPI, Response
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from iiif_download import IIIFManifest
 import uuid
 import img2pdf
@@ -26,6 +27,18 @@ async def async_log_monitor(events_log):
                 yield f"data: {line.strip()}\n\n"
 
 app = FastAPI()
+
+origins = [
+    "http://iiif-downloader.liamengland.com",
+    "http://localhost",
+    "http://localhost:5173"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_headers=["*"],
+)
 
 
 @app.get("/iiif")
